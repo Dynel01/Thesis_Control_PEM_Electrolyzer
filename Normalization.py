@@ -1,15 +1,14 @@
 import pyomo.environ as pyo
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import timedelta
 import Electrochemical_Model as ECM
 import Thermal_Model as TM
 import Mass_balance_model as MM
 import PEMWE_Parameters as PEM
 
 # =========================================================
-# 1. DATA (loaded once)
+# 1. DATA + MODE TABLE
 # =========================================================
 df = pd.read_csv("Anholt_hub_analysis.csv")
 results_df = pd.read_csv("results_table.csv")
@@ -29,15 +28,10 @@ M_temp = 400
 M_cool = 3e5
 M_deg = 500.0
 T_limit = PEM.T_min
-T_max = PEM.T_max
 P_COLD = 0.10 * plant_capacity_kw
 P_aux = 0.05 * plant_capacity_kw
-stack_capacity_kw_max = plant_capacity_kw - P_aux
-mode_temp_tol = 2.501  # ~half the 5C table spacing
-cumulative_h2_delivered = 0.0
-# =========================================================
-# 2. MODE TABLE (SOH = 1 ONLY) -- built once, reused by every window
-# =========================================================
+mode_temp_tol = 2.501
+
 df_soh1 = results_df[results_df['current_SOH'].round(1) == 1.0].copy()
 df_soh1['mode_id'] = range(len(df_soh1))
 print(f"DEBUG: Rows found for SOH 1.0: {len(df_soh1)}")
@@ -55,7 +49,6 @@ i_map = {i: mode_params[i]['I_stack'] for i in MODES}
 T_map = {i: mode_params[i]['current_T'] for i in MODES}
 vtn_map = {i: mode_params[i]['V_tn'] for i in MODES}
 
-# ON-state degradation, per mode
 B_constant = 0.04
 T_nominal_K = 60.0 + 273.15
 deg_map = {}
@@ -66,10 +59,9 @@ for i in MODES:
 CAPEX_total = 494 * 13.5 * 10000
 deg_cost_map = {i: CAPEX_total * (deg_map[i] / 0.18) for i in MODES}
 
-mu_standby_rate = 1.5e-6  # V/h, Lu et al. 2023 "constant low current"
+mu_standby_rate = 1.5e-6
 mu_standby_step = mu_standby_rate * (dt_seconds / 3600)
 
-# Heat recovery / district heating revenue, per mode
 T_target_dh = 70.0 + 273.15
 dT_pinch = 2.0
 eta_hp = 0.45
@@ -89,25 +81,20 @@ for i in MODES:
         Q_delivered_map[i] = Q_source_kw + W_pump_map[i]
 
 pi_h2 = 5.0
-pi_h2_grey= 2.0
+pi_h2_grey = 2.0
 pi_heat = 30.0
 
+# Sensible degradation reference: nominal-mode steady operation, NOT the
+# pathological worst-case cycling scenario. This is the fix for the
+# nadir-point degeneracy problem found in the earlier normalization attempt.
+nominal_mode_id = min(MODES, key=lambda i: abs(T_map[i] - T_nominal_K))
+DEG_REFERENCE_PER_STEP = deg_cost_map[nominal_mode_id]
+
 
 # =========================================================
-# 3. BUILD + SOLVE ONE MPC WINDOW
+# 2. SHARED MODEL BUILDER (constraints only, no objective)
 # =========================================================
-def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_prev,
-                            price_win, wind_win, remaining_needed=0.0,
-                            mip_gap=0.01, verbose=True):
-    """
-    Builds and solves one receding-horizon window.
-    T_stack_init, P_stack_init, y_off_prev: real state carried over from the
-        previously committed step (fixed numbers, not variables).
-    price_win, wind_win: dicts keyed 0..window_len-1 for THIS window only.
-    epsilon: max fraction of the window's own H2-maximum the second stage is
-        allowed to sacrifice in exchange for heat revenue / lower degradation.
-    Returns the solved model (after stage 2) and the window length.
-    """
+def build_model(T_stack_init, P_stack_init, y_off_prev, price_win, wind_win, remaining_needed=0.0):
     window_len = len(price_win)
     model = pyo.ConcreteModel()
     model.T = pyo.RangeSet(0, window_len - 1)
@@ -129,14 +116,9 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     model.y_grid_direction = pyo.Var(model.T, within=pyo.Binary)
     model.h2_green = pyo.Var(model.T, within=pyo.NonNegativeReals)
     model.h2_grey = pyo.Var(model.T, within=pyo.NonNegativeReals)
-    model.h2_shortfall = pyo.Var( model.T, within=pyo.NonNegativeReals)
+    model.h2_shortfall = pyo.Var(model.T, within=pyo.NonNegativeReals)
     model.z_shutdown_begin = pyo.Var(model.T, within=pyo.Binary)
-    # Initial conditions -- carried over from the previous committed step
-    # (or the true absolute start, for the very first window).
-    # t=0 is the fixed, known "current state" -- exactly matching the
-    # original script's convention. We commit t=1 (the first genuinely
-    # free decision), not t=0, so this anchor stays a pure boundary
-    # condition, never something the optimizer needs to decide.
+
     model.init_power = pyo.Constraint(expr=model.P_stack[0] == P_stack_init)
     model.init_temp = pyo.Constraint(expr=model.T_stack[0] == T_stack_init)
 
@@ -185,9 +167,9 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     model.sequence_constraint = pyo.Constraint(model.T, rule=sequence_rule)
     
     def cold_start_requires_prior_off(m, t):
-            prev_off = y_off_prev if t == 0 else m.y_off[t - 1]
-            prev_cold_start = y_cold_start_prev if t == 0 else m.y_cold_start[t - 1]
-            return m.y_cold_start[t] <= prev_off+prev_cold_start
+        prev_off = y_off_prev if t == 0 else m.y_off[t - 1]
+        prev_cold_start = 0 if t == 0 else m.y_cold_start[t - 1]
+        return m.y_cold_start[t] <= prev_off+prev_cold_start
     model.cold_start_requires_prior_off = pyo.Constraint(model.T, rule=cold_start_requires_prior_off)
 
     def power_ramp_rule(m, t):
@@ -254,21 +236,20 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     def h2_split_rule(m, t):
         return m.h2_green[t] + m.h2_grey[t] == m.m_h2[t]
     model.h2_split = pyo.Constraint(model.T, rule=h2_split_rule)
-    
-    M_h2= 500
+
+    M_h2 = 500
     def h2_grey_gate_rule(m, t):
-    # grey only allowed when importing that step (y_grid_direction=0)
         return m.h2_grey[t] <= M_h2 * (1 - m.y_grid_direction[t])
     model.h2_grey_gate = pyo.Constraint(model.T, rule=h2_grey_gate_rule)
-    
+
     def h2_green_gate_rule(m, t):
         return m.h2_green[t] <= M_h2 * m.y_grid_direction[t]
     model.h2_green_gate = pyo.Constraint(model.T, rule=h2_green_gate_rule)
-    
+
     def h2_min_rule(m):
         return sum(m.h2_green[t] for t in m.T) + sum(m.h2_shortfall[t] for t in m.T) >= remaining_needed
     model.h2_min_constraint = pyo.Constraint(rule=h2_min_rule)
-    
+
     def shutdown_event_rule1(m, t):
         prev_off = y_off_prev if t == 0 else m.y_off[t - 1]
         return m.z_shutdown_begin[t] >= m.y_off[t] - prev_off
@@ -277,7 +258,7 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     def shutdown_event_rule2(m, t):
         return m.z_shutdown_begin[t] <= m.y_off[t]
     model.shutdown_event2 = pyo.Constraint(model.T, rule=shutdown_event_rule2)
-    
+
     def heat_delivered_raw_rule(m, t):
         return sum(m.x[t, i] * Q_delivered_map[i] for i in m.I)
     model.Q_delivered_raw = pyo.Expression(model.T, rule=heat_delivered_raw_rule)
@@ -352,7 +333,7 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
         prev_t = last_t - 1
         return m.T_stack[last_t] >= m.T_stack[prev_t] - 5.0
     model.terminal_temp = pyo.Constraint(rule=terminal_temp_rule)
-    
+
     M_grid = plant_capacity_kw + 5e5
     def grid_import_cap_rule(m, t):
         return m.P_grid_import[t] <= plant_capacity_kw
@@ -365,161 +346,174 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     def export_lock_rule(m, t):
         return m.P_grid_export[t] <= M_grid * m.y_grid_direction[t]
     model.export_lock = pyo.Constraint(model.T, rule=export_lock_rule)
+
     def power_limit_rule(m, t):
-        return m.P_stack[t] + P_aux * (1 - m.y_off[t]) <= wind_win[t]+m.P_grid_import[t]
+        return m.P_stack[t] + P_aux * (1 - m.y_off[t]) <= wind_win[t] + m.P_grid_import[t]
     model.power_limit = pyo.Constraint(model.T, rule=power_limit_rule)
 
     def grid_def_rule(m, t):
-        return m.P_grid_import[t]+wind_win[t] == (m.P_stack[t] + P_aux * (1 - m.y_off[t])+ m.P_grid_export[t])
+        return m.P_grid_import[t] + wind_win[t] == (m.P_stack[t] + P_aux * (1 - m.y_off[t]) + m.P_grid_export[t])
     model.grid_def = pyo.Constraint(model.T, rule=grid_def_rule)
 
     def total_power_cap_rule(m, t):
         return m.P_stack[t] + P_aux * (1 - m.y_off[t]) <= plant_capacity_kw
     model.total_power_cap = pyo.Constraint(model.T, rule=total_power_cap_rule)
-    
-    # model.h2_pacing_constraint = pyo.Constraint(
-    # expr=sum(model.m_h2[t] for t in range(1, CONTROL_HORIZON+1)) >= remaining_needed)
 
-    # -----------------------------------------------------
-    # STAGE 1: maximize H2 alone (the primary objective).
-    # -----------------------------------------------------
-    # discount = {t: 0.97 ** t for t in range(window_len)}
-
-    # model.Objective_H2 = pyo.Objective(
-    #     expr=sum(discount[t] * model.m_h2[t] for t in model.T), sense=pyo.maximize
-    # )
-
-    # solver = pyo.SolverFactory('gurobi')
-    # solver.options['MIPFocus'] = 1
-
-    # # Stage 1 is a much simpler problem (pure H2 sum only).
-    # solver.options['MIPGap'] = 0.0005
-    # solver.solve(model, tee=verbose)
-
-    # # Record STAGE 1's actual per-step schedule. This
-    # # is what Stage 2 gets compared against, timestep by timestep.
-    # h2_stage1 = {t: pyo.value(model.m_h2[t]) for t in model.T}
-    # H2_max = sum(h2_stage1.values())
-
-    # -----------------------------------------------------
-    # STAGE 2: at EVERY timestep, stay within epsilon of what Stage 1
-    # already decided for that specific step -- not just the window total.
-    # -----------------------------------------------------
-    # def h2_floor_rule(m, t):
-    #     return m.m_h2[t] >= (1 - epsilon) * h2_stage1[t]
-    # model.h2_floor = pyo.Constraint(model.T, rule=h2_floor_rule)
-    # model.Objective_H2.deactivate()
-
-    def objective_rule(m):
-        revenue_h2 = 1.0 * (sum(pi_h2 * m.h2_green[t] for t in m.T))+sum(pi_h2_grey * m.h2_grey[t] for t in m.T)
-        grid_rev = sum((price_win[t] / 1e3) * (1 / 6) * (m.P_grid_export[t]-m.P_grid_import[t]) for t in m.T)
-        degradation = sum( m.degradation_cost[t] for t in m.T)
-        heat_rev = sum(
-             (
-                m.Q_delivered[t] * (pi_heat / 1e3) * (1 / 6)
-                - m.W_pump[t] * (price_win[t] / 1e3) * (1 / 6)
-            )
-            for t in m.T
-        )
-        pure_revenue= revenue_h2 + grid_rev - degradation + heat_rev
-        h2_shortfall= sum(pi_h2_grey*m.h2_shortfall[t] for t in m.T)
-        return pure_revenue - h2_shortfall
-    model.Objective_secondary = pyo.Objective(rule=objective_rule, sense=pyo.maximize)
-
-    solver = pyo.SolverFactory('gurobi')
-    solver.options['MIPFocus'] = 1
-    solver.options['MIPGap'] = mip_gap  # back to the looser, speed-focused gap for the harder problem
-    results=solver.solve(model, tee=verbose)
-    print(f"  Status: {results.solver.termination_condition}, "
-      f"Gap at cutoff: {getattr(results.solver, 'gap', 'n/a')}")
     return model
 
 
 # =========================================================
-# 4. MPC ROLLING LOOP
+# 3. NORMALIZATION REFERENCE SOLVES + FINAL WEIGHTED SCORE
 # =========================================================
-WINDOW_LEN = 144          # 24 hours at 10-min resolution -- prediction horizon
-BASE_IDX = 26208          # 2014-01-11 12:00 -- start of the demonstration period
-TOTAL_REAL_STEPS = 432    # 3 days 
-CONTROL_HORIZON = 6       # commit 6 steps (1 hour) before re-solving, cuts
-H_MIN_PER_DAY = 20000
-H_min = H_MIN_PER_DAY * (TOTAL_REAL_STEPS / 144)         
-# EPSILON = 0.02            # allow at most 2% H2 sacrifice for heat/degradation
+def solve_weighted_normalized(T_stack_init, P_stack_init, y_off_prev,
+                               price_win, wind_win, remaining_needed=0.0,
+                               weights=(0.5, 0.3, 0.1, 0.1),  # (H2, Grid, Heat, Degradation)
+                               pi_shortfall=2.0,
+                               mip_gap=0.0001, verbose=False):
+    window_len = len(price_win)
+    w_h2, w_grid, w_heat, w_deg = weights
+    discount = {t: 0.99 ** t for t in range(window_len)}
 
-T_stack_current = 298.15
-P_stack_current = 0.0
-y_off_current = 1.0
-y_cold_start_current = 0.0
-# Real time 0 (== BASE_IDX in the underlying data) is the true, known
-# simulation start -- trivially OFF, no solve needed for it.
-committed = [{
-    'time': 0, 'P_stack': 0.0, 'T_stack': 298.15, 'H2': 0.0,
-    'Q_delivered': 0.0, 'W_pump': 0.0, 'degradation_cost': 0.0,
-    'y_on': 0.0, 'y_off': 1.0, 'y_standby': 0.0, 'y_cold_start': 0.0,
-    'wind': float(df.loc[BASE_IDX, 'wtc_ActPower_mean']),
-    'Grid Import': 0.0, 'Grid Export': 0.0,
-    'price': float(df.loc[BASE_IDX, 'SpotPrice_DK1']) * 3,
-    'window_H2_max': None, 'active_mode': None,
-}]
+    def solve_single_objective(expr_fn, label):
+        m = build_model(T_stack_init, P_stack_init, y_off_prev, price_win, wind_win, remaining_needed)
+        m.Obj = pyo.Objective(expr=expr_fn(m), sense=pyo.maximize)
+        solver = pyo.SolverFactory('gurobi')
+        solver.options['MIPGap'] = mip_gap
+        solver.options['MIPFocus'] = 1
+        results = solver.solve(m, tee=verbose)
+        print(f"  [{label}] status: {results.solver.termination_condition}")
+        return m
 
-k = 0
-while k < TOTAL_REAL_STEPS:
-    price_win = {t: float(df.loc[BASE_IDX + k + t, 'SpotPrice_DK1']) * 3 for t in range(WINDOW_LEN)}
-    wind_win = {t: float(df.loc[BASE_IDX + k + t, 'wtc_ActPower_mean']) for t in range(WINDOW_LEN)}
-    required_by_now = H_min * (k + CONTROL_HORIZON) / TOTAL_REAL_STEPS
-    remaining_needed = max(0, required_by_now - cumulative_h2_delivered)*0.8
+    # --- Reference 1: max H2 (green, weighted toward priority) alone ---
+    # m_h2max = solve_single_objective(
+    #     lambda m: sum(discount[t] * (pi_h2 * m.h2_green[t] + pi_h2_grey * m.h2_grey[t]) for t in m.T),
+    #     "H2_max ref"
+    # )
+    # H2_max = sum(pi_h2 * pyo.value(m_h2max.h2_green[t]) + pi_h2_grey * pyo.value(m_h2max.h2_grey[t]) for t in m_h2max.T)
+    # H2_max = max(H2_max, 1e-6)
+    H2_max = H_min * pi_h2  # fixed, target-based reference -- revenue value of hitting the mandatory floor
+    H2_max = max(H2_max, 1e-6)
 
-    model = build_and_solve_window(
-        T_stack_current, P_stack_current, y_off_current, y_cold_start_current,
-        price_win, wind_win, remaining_needed=remaining_needed, verbose=False)
+    # --- Reference 2: max grid revenue alone ---
+    def grid_expr(m):
+        return sum(discount[t] * (price_win[t]/1e3) * (1/6) * (m.P_grid_export[t]-m.P_grid_import[t]) for t in m.T)
+    m_gridmax = solve_single_objective(grid_expr, "Grid_max ref")
+    Grid_max = sum((price_win[t]/1e3)*(1/6)*(pyo.value(m_gridmax.P_grid_export[t])-pyo.value(m_gridmax.P_grid_import[t])) for t in m_gridmax.T)
+    Grid_max = max(Grid_max, 1e-6)
 
-    # Commit CONTROL_HORIZON steps (1..CONTROL_HORIZON)
-    for c in range(1, CONTROL_HORIZON + 1):
+    # --- Reference 3: max heat revenue alone ---
+    def heat_expr(m):
+        return sum(discount[t] * (
+            m.Q_delivered[t]*(pi_heat/1e3)*(1/6) - m.W_pump[t]*(price_win[t]/1e3)*(1/6)
+        ) for t in m.T)
+    m_heatmax = solve_single_objective(heat_expr, "Heat_max ref")
+    Heat_max = sum(pyo.value(m_heatmax.Q_delivered[t])*(pi_heat/1e3)*(1/6) - pyo.value(m_heatmax.W_pump[t])*(price_win[t]/1e3)*(1/6) for t in m_heatmax.T)
+    Heat_max = max(Heat_max, 1e-6)
+
+    # --- Reference 4: degradation -- SENSIBLE reference, not pathological worst-case ---
+    Deg_reference = DEG_REFERENCE_PER_STEP * window_len
+    Deg_reference = max(Deg_reference, 1e-6)
+
+    print(f"\n  Normalization references: H2_max={H2_max:.2f}, Grid_max={Grid_max:.2f}, "
+          f"Heat_max={Heat_max:.2f}, Deg_reference={Deg_reference:.2f} (all EUR)")
+    print(f"  NOTE: H2_max and Grid_max are independently-optimal and likely mutually exclusive "
+          f"(running the plant vs exporting freely) -- known ideal-point infeasibility limitation.\n")
+
+    # --- Final: weighted, normalized Score ---
+    model = build_model(T_stack_init, P_stack_init, y_off_prev, price_win, wind_win, remaining_needed)
+
+    def score_rule(m):
+        h2_norm = sum(pi_h2*m.h2_green[t] + pi_h2_grey*m.h2_grey[t] for t in m.T) / H2_max
+        grid_norm = sum((price_win[t]/1e3)*(1/6)*(m.P_grid_export[t]-m.P_grid_import[t]) for t in m.T) / Grid_max
+        heat_norm = sum(m.Q_delivered[t]*(pi_heat/1e3)*(1/6) - m.W_pump[t]*(price_win[t]/1e3)*(1/6) for t in m.T) / Heat_max
+        deg_norm = sum(m.degradation_cost[t] for t in m.T) / Deg_reference
+        shortfall_term = sum(pi_shortfall * m.h2_shortfall[t] for t in m.T) / H2_max
+        return w_h2*h2_norm + w_grid*grid_norm + w_heat*heat_norm - w_deg*deg_norm - shortfall_term
+
+    model.Score = pyo.Objective(rule=score_rule, sense=pyo.maximize)
+    solver = pyo.SolverFactory('gurobi')
+    solver.options['MIPGap'] = mip_gap
+    solver.options['MIPFocus'] = 1
+    results = solver.solve(model, tee=True)
+    print(f"  [Final weighted Score] status: {results.solver.termination_condition}")
+
+    total_h2_green = sum(pyo.value(model.h2_green[t]) for t in model.T)
+    total_h2_grey = sum(pyo.value(model.h2_grey[t]) for t in model.T)
+    total_h2_rev = pi_h2*total_h2_green + pi_h2_grey*total_h2_grey
+    total_grid_rev = sum((price_win[t]/1e3)*(1/6)*(pyo.value(model.P_grid_export[t])-pyo.value(model.P_grid_import[t])) for t in model.T)
+    total_heat_rev = sum(pyo.value(model.Q_delivered[t])*(pi_heat/1e3)*(1/6) - pyo.value(model.W_pump[t])*(price_win[t]/1e3)*(1/6) for t in model.T)
+    total_deg = sum(pyo.value(model.degradation_cost[t]) for t in model.T)
+
+    print(f"\n=== NORMALIZED WEIGHTED OBJECTIVE (weights H2={w_h2}, Grid={w_grid}, Heat={w_heat}, Deg={w_deg}) ===")
+    print(f"  Score achieved: {pyo.value(model.Score):.4f}")
+    print(f"  H2 green: {total_h2_green:.2f} kg, H2 grey: {total_h2_grey:.2f} kg")
+    print(f"  H2 revenue (true, unweighted): EUR {total_h2_rev:,.2f}")
+    print(f"  Grid revenue: EUR {total_grid_rev:,.2f}")
+    print(f"  Heat revenue: EUR {total_heat_rev:,.2f}")
+    print(f"  Degradation: EUR {total_deg:,.2f}")
+    print(f"  NET total (true revenue): EUR {total_h2_rev+total_grid_rev+total_heat_rev-total_deg:,.2f}")
+
+    return model, {'H2_max': H2_max, 'Grid_max': Grid_max, 'Heat_max': Heat_max, 'Deg_reference': Deg_reference}
+
+
+if __name__ == "__main__":
+    BASE_IDX = 26208
+    WINDOW_LEN = 432
+    H_MIN_PER_DAY = 20000
+    H_min = H_MIN_PER_DAY * (WINDOW_LEN / 144)
+
+    price_win = {t: float(df.loc[BASE_IDX + t, 'SpotPrice_DK1']) * 3 for t in range(WINDOW_LEN)}
+    wind_win = {t: float(df.loc[BASE_IDX + t, 'wtc_ActPower_mean']) for t in range(WINDOW_LEN)}
+
+    model,refs= solve_weighted_normalized(298.15, 0.0, 1.0, price_win, wind_win,
+                               remaining_needed=H_min, weights=(0.5, 0.3, 0.1, 0.1),
+                               pi_shortfall=2.0, verbose=False)
+    
+    
+    
+        # =========================================================
+    # CSV EXPORT -- same pattern as your other scripts
+    # =========================================================
+    rows = []
+    for t in model.T:
         active_mode = None
         for i in model.I:
-            if pyo.value(model.x[c, i]) > 0.5:
+            if pyo.value(model.x[t, i]) > 0.5:
                 active_mode = i
                 break
 
-        committed.append({
-            'time': k + c,
-            'P_stack': pyo.value(model.P_stack[c]),
-            'P_stack_plus_aux': pyo.value(model.P_stack[c]) + P_aux * (1 - pyo.value(model.y_off[c])),
-            'T_stack': pyo.value(model.T_stack[c]),
-            'H2': pyo.value(model.m_h2[c]),
-            'H2_green': pyo.value(model.h2_green[c]),
-            'H2_grey': pyo.value(model.h2_grey[c]),
-            'Q_delivered': pyo.value(model.Q_delivered[c]),
-            'W_pump': pyo.value(model.W_pump[c]),
-            'degradation_cost': pyo.value(model.degradation_cost[c]),
-            'y_on': pyo.value(model.y_on[c]),
-            'y_off': pyo.value(model.y_off[c]),
-            'y_standby': pyo.value(model.y_standby[c]),
-            'y_cold_start': pyo.value(model.y_cold_start[c]),
-            'wind': wind_win[c],
-            'Grid Import': pyo.value(model.P_grid_import[c]),
-            'Grid Export': pyo.value(model.P_grid_export[c]),
-            'price': price_win[c],
+        rows.append({
+            'time': t,
+            'P_stack': pyo.value(model.P_stack[t]),
+            'P_stack_plus_aux': pyo.value(model.P_stack[t]) + P_aux * (1 - pyo.value(model.y_off[t])),
+            'T_stack': pyo.value(model.T_stack[t]),
+            'H2': pyo.value(model.m_h2[t]),
+            'H2_green': pyo.value(model.h2_green[t]),
+            'H2_grey': pyo.value(model.h2_grey[t]),
+            'H2_shortfall': pyo.value(model.h2_shortfall[t]),
+            'Q_delivered': pyo.value(model.Q_delivered[t]),
+            'W_pump': pyo.value(model.W_pump[t]),
+            'degradation_cost': pyo.value(model.degradation_cost[t]),
+            'y_on': pyo.value(model.y_on[t]),
+            'y_off': pyo.value(model.y_off[t]),
+            'y_standby': pyo.value(model.y_standby[t]),
+            'y_cold_start': pyo.value(model.y_cold_start[t]),
+            'wind': wind_win[t],
+            'Grid Import': pyo.value(model.P_grid_import[t]),
+            'Grid Export': pyo.value(model.P_grid_export[t]),
+            'price': price_win[t],
             'active_mode': active_mode,
         })
 
-    # Carry forward from the LAST committed step (index CONTROL_HORIZON)
-    T_stack_current = pyo.value(model.T_stack[CONTROL_HORIZON])
-    P_stack_current = pyo.value(model.P_stack[CONTROL_HORIZON])
-    y_off_current = pyo.value(model.y_off[CONTROL_HORIZON])
-    y_cold_start_current = pyo.value(model.y_cold_start[CONTROL_HORIZON])
+    normalized_results = pd.DataFrame(rows)
+    normalized_results.to_csv("normalized_results_0.5_scenario_4.csv", index=False)
 
-    print(f"[real t={k+1}-{k+CONTROL_HORIZON}] committed P={committed[-1]['P_stack']:.0f} kW, "
-          f"T={committed[-1]['T_stack']:.2f} K, H2={committed[-1]['H2']:.2f} kg")
-    committed_h2_this_window = sum(pyo.value(model.m_h2[t]) for t in range(1, CONTROL_HORIZON+1))
-    cumulative_h2_delivered += committed_h2_this_window
-    k += CONTROL_HORIZON
-    
+    total_h2_green = normalized_results['H2_green'].sum()
+    total_h2_grey = normalized_results['H2_grey'].sum()
+    total_deg = normalized_results['degradation_cost'].sum()
 
-mpc_results = pd.DataFrame(committed)
-mpc_results.to_csv("mpc_results_guaranteed_floor_shortfall_less_scenario_4_lower_weight.csv", index=False)
-num_solves = -(-TOTAL_REAL_STEPS // CONTROL_HORIZON)
-print(f"\nDone. {TOTAL_REAL_STEPS} real steps committed via {num_solves} solves, results in mpc_results.csv")
-print(f"Total H2 (committed steps): {mpc_results['H2'].sum():.2f} kg")
-print(f"Total degradation cost (committed steps): EUR {mpc_results['degradation_cost'].sum():,.2f}")
-print(f"Gap at cutoff: {mpc_results.solver.gap if hasattr(mpc_results.solver,'gap') else 'n/a'}")
+    print(f"\nDone. {WINDOW_LEN} steps solved (normalized, single-shot).")
+    print(f"Total H2 green: {total_h2_green:.2f} kg")
+    print(f"Total H2 grey: {total_h2_grey:.2f} kg")
+    print(f"Total degradation cost: EUR {total_deg:,.2f}")
+    print(f"Normalization references used: {refs}")

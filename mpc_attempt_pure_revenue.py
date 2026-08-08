@@ -9,7 +9,7 @@ import Mass_balance_model as MM
 import PEMWE_Parameters as PEM
 
 # =========================================================
-# 1. DATA (loaded once)
+# 1. DATA (loaded once -- not per MPC window)
 # =========================================================
 df = pd.read_csv("Anholt_hub_analysis.csv")
 results_df = pd.read_csv("results_table.csv")
@@ -97,7 +97,7 @@ pi_heat = 30.0
 # 3. BUILD + SOLVE ONE MPC WINDOW
 # =========================================================
 def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_prev,
-                            price_win, wind_win, remaining_needed=0.0,
+                            price_win, wind_win,
                             mip_gap=0.01, verbose=True):
     """
     Builds and solves one receding-horizon window.
@@ -133,10 +133,6 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     model.z_shutdown_begin = pyo.Var(model.T, within=pyo.Binary)
     # Initial conditions -- carried over from the previous committed step
     # (or the true absolute start, for the very first window).
-    # t=0 is the fixed, known "current state" -- exactly matching the
-    # original script's convention. We commit t=1 (the first genuinely
-    # free decision), not t=0, so this anchor stays a pure boundary
-    # condition, never something the optimizer needs to decide.
     model.init_power = pyo.Constraint(expr=model.P_stack[0] == P_stack_init)
     model.init_temp = pyo.Constraint(expr=model.T_stack[0] == T_stack_init)
 
@@ -185,9 +181,9 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     model.sequence_constraint = pyo.Constraint(model.T, rule=sequence_rule)
     
     def cold_start_requires_prior_off(m, t):
-            prev_off = y_off_prev if t == 0 else m.y_off[t - 1]
-            prev_cold_start = y_cold_start_prev if t == 0 else m.y_cold_start[t - 1]
-            return m.y_cold_start[t] <= prev_off+prev_cold_start
+        prev_off = y_off_prev if t == 0 else m.y_off[t - 1]
+        prev_cold_start = y_cold_start_prev if t == 0 else m.y_cold_start[t - 1]
+        return m.y_cold_start[t] <= prev_off+prev_cold_start
     model.cold_start_requires_prior_off = pyo.Constraint(model.T, rule=cold_start_requires_prior_off)
 
     def power_ramp_rule(m, t):
@@ -265,9 +261,9 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
         return m.h2_green[t] <= M_h2 * m.y_grid_direction[t]
     model.h2_green_gate = pyo.Constraint(model.T, rule=h2_green_gate_rule)
     
-    def h2_min_rule(m):
-        return sum(m.h2_green[t] for t in m.T) + sum(m.h2_shortfall[t] for t in m.T) >= remaining_needed
-    model.h2_min_constraint = pyo.Constraint(rule=h2_min_rule)
+    # def h2_min_rule(m):
+    #     return sum(m.h2_green[t] for t in m.T) + sum(m.h2_shortfall[t] for t in m.T) >= H_min
+    # model.h2_min_constraint = pyo.Constraint(rule=h2_min_rule)
     
     def shutdown_event_rule1(m, t):
         prev_off = y_off_prev if t == 0 else m.y_off[t - 1]
@@ -382,6 +378,8 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
 
     # -----------------------------------------------------
     # STAGE 1: maximize H2 alone (the primary objective).
+    # A mild discount is applied to reflect that only step 0 ever actually
+    # gets committed.
     # -----------------------------------------------------
     # discount = {t: 0.97 ** t for t in range(window_len)}
 
@@ -392,7 +390,6 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     # solver = pyo.SolverFactory('gurobi')
     # solver.options['MIPFocus'] = 1
 
-    # # Stage 1 is a much simpler problem (pure H2 sum only).
     # solver.options['MIPGap'] = 0.0005
     # solver.solve(model, tee=verbose)
 
@@ -411,7 +408,7 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     # model.Objective_H2.deactivate()
 
     def objective_rule(m):
-        revenue_h2 = 1.0 * (sum(pi_h2 * m.h2_green[t] for t in m.T))+sum(pi_h2_grey * m.h2_grey[t] for t in m.T)
+        revenue_h2 = (sum(pi_h2 * m.h2_green[t] for t in m.T))+sum(pi_h2_grey * m.h2_grey[t] for t in m.T)
         grid_rev = sum((price_win[t] / 1e3) * (1 / 6) * (m.P_grid_export[t]-m.P_grid_import[t]) for t in m.T)
         degradation = sum( m.degradation_cost[t] for t in m.T)
         heat_rev = sum(
@@ -421,9 +418,8 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
             )
             for t in m.T
         )
-        pure_revenue= revenue_h2 + grid_rev - degradation + heat_rev
-        h2_shortfall= sum(pi_h2_grey*m.h2_shortfall[t] for t in m.T)
-        return pure_revenue - h2_shortfall
+        # h2_shortfall= sum(pi_h2*m.h2_shortfall[t] for t in m.T)
+        return revenue_h2 + grid_rev - degradation + heat_rev
     model.Objective_secondary = pyo.Objective(rule=objective_rule, sense=pyo.maximize)
 
     solver = pyo.SolverFactory('gurobi')
@@ -439,19 +435,20 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
 # 4. MPC ROLLING LOOP
 # =========================================================
 WINDOW_LEN = 144          # 24 hours at 10-min resolution -- prediction horizon
-BASE_IDX = 26208          # 2014-01-11 12:00 -- start of the demonstration period
-TOTAL_REAL_STEPS = 432    # 3 days 
+BASE_IDX = 26208          # 2014-01-11 12:00 -- start of the demonstration period      
+TOTAL_REAL_STEPS = 432    # 3 days centered on the known wind dip
 CONTROL_HORIZON = 6       # commit 6 steps (1 hour) before re-solving, cuts
-H_MIN_PER_DAY = 20000
-H_min = H_MIN_PER_DAY * (TOTAL_REAL_STEPS / 144)         
+# H_MIN_PER_DAY = 20000
+# H_min = H_MIN_PER_DAY * (TOTAL_REAL_STEPS / 144)         
 # EPSILON = 0.02            # allow at most 2% H2 sacrifice for heat/degradation
 
 T_stack_current = 298.15
 P_stack_current = 0.0
 y_off_current = 1.0
 y_cold_start_current = 0.0
+
 # Real time 0 (== BASE_IDX in the underlying data) is the true, known
-# simulation start -- trivially OFF, no solve needed for it.
+# simulation start 
 committed = [{
     'time': 0, 'P_stack': 0.0, 'T_stack': 298.15, 'H2': 0.0,
     'Q_delivered': 0.0, 'W_pump': 0.0, 'degradation_cost': 0.0,
@@ -466,12 +463,12 @@ k = 0
 while k < TOTAL_REAL_STEPS:
     price_win = {t: float(df.loc[BASE_IDX + k + t, 'SpotPrice_DK1']) * 3 for t in range(WINDOW_LEN)}
     wind_win = {t: float(df.loc[BASE_IDX + k + t, 'wtc_ActPower_mean']) for t in range(WINDOW_LEN)}
-    required_by_now = H_min * (k + CONTROL_HORIZON) / TOTAL_REAL_STEPS
-    remaining_needed = max(0, required_by_now - cumulative_h2_delivered)*0.8
+    # required_by_now = H_min * (k + CONTROL_HORIZON) / TOTAL_REAL_STEPS
+    # remaining_needed = max(0, required_by_now - cumulative_h2_delivered)*0.8
 
     model = build_and_solve_window(
         T_stack_current, P_stack_current, y_off_current, y_cold_start_current,
-        price_win, wind_win, remaining_needed=remaining_needed, verbose=False)
+        price_win, wind_win,  verbose=False)
 
     # Commit CONTROL_HORIZON steps (1..CONTROL_HORIZON)
     for c in range(1, CONTROL_HORIZON + 1):
@@ -517,7 +514,7 @@ while k < TOTAL_REAL_STEPS:
     
 
 mpc_results = pd.DataFrame(committed)
-mpc_results.to_csv("mpc_results_guaranteed_floor_shortfall_less_scenario_4_lower_weight.csv", index=False)
+mpc_results.to_csv("mpc_results_pure_revenue_scenario_4.csv", index=False)
 num_solves = -(-TOTAL_REAL_STEPS // CONTROL_HORIZON)
 print(f"\nDone. {TOTAL_REAL_STEPS} real steps committed via {num_solves} solves, results in mpc_results.csv")
 print(f"Total H2 (committed steps): {mpc_results['H2'].sum():.2f} kg")
