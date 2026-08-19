@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 *.csv
+!results_table.csv
+!mpc_results_annual_gf15.csv
 .ipynb_checkpoints/
 *.log
 gurobi.lic
