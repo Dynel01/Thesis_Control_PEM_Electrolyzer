@@ -138,7 +138,10 @@ scenarios = {
     "Scenario 4: Generic": scenario4_idx
 }
 
-# Adjusted figure size and spacing layout
+print("Feature standard deviations (sigma_f) used for normalization:")
+for f in features:
+    print(f"  {f}: {feature_stds[f]:.4f}")
+# Figure size and spacing layout
 fig, axes = plt.subplots(len(scenarios), 2, figsize=(14, 12), sharex=False)
 
 for row, (label, base_idx) in enumerate(scenarios.items()):
@@ -187,5 +190,5 @@ axes[-1, 1].set_xlabel("Time Step (10-min intervals)", fontsize=10)
 plt.tight_layout(rect=[0, 0, 1, 0.98])
 plt.subplots_adjust(hspace=0.45, wspace=0.2)
 
-plt.savefig("scenario_comparison.png", dpi=300, bbox_inches='tight')
+# plt.savefig("scenario_comparison.png", dpi=300, bbox_inches='tight')
 plt.show()

@@ -134,14 +134,14 @@ color3  = ['#1f77b4']
 # Temperature-Dependent Thermoneutral Voltage
 def V_tn(T):
     """Thermoneutral voltage [V], T in Kelvin"""
-    return 1.4756 + 2.252e-4 * T + 1.52e-8 * T**2
+    return 1.4756 + 2.252e-4 * (T-273.15) + 1.52e-8 * (T-273.15)**2
             
 
 test_temps_c = (40, 55, 80)
 
 
 if __name__ == "__main__":
-    print("--- 210 MW Hub Simulation Starting ---")
+    print("--- Electrochemical Model Diagnostics ---")
     
     print("── p_sat across operating range ──")
     for t_c in [60, 65, 70, 75, 80]:

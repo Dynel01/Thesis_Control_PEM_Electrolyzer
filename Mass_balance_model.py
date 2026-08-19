@@ -1,3 +1,4 @@
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
@@ -96,15 +97,7 @@ for P_goal in P_range:
         # Production-driven "supersaturation tendency"
         C_gen = n_dot_h2_theo / (J_mt + 1e-30)  # mol/m^3
 
-        # Smooth two-phase transition (no hard cap)
-        # This mimics onset of gas formation instead of clipping
-        # C_H2_mem = C_eq * (1 + C_gen / (C_eq + C_gen))
-
-        # n_perm_h2_stack = (A_m2 * N_cells * Dmem_H2 / (L_pem_m)) * C_H2_mem
-        # eta_F_physical = (n_dot_h2_theo - n_perm_h2_stack) / n_dot_h2_theo
-        # n_dot_h2_gen = n_dot_h2_theo * eta_F_physical
-        
-        # --- CHOP OUT THE OLD EQUATIONS AND REPLACE WITH THIS STANDARD PHYSICS MODEL ---
+        # --- Hydrogen crossover: Henry's-law-based physical model ---
         # 1. Determine the concentration of hydrogen dissolved at the membrane boundary (Henry's Law)
         # It depends directly on cathode pressure, meaning it stays active even at low loads!
         C_H2_mem = (p_cathode * 1e5) / Hmem_H2  # mol/m^3
@@ -113,7 +106,7 @@ for P_goal in P_range:
         n_perm_h2_stack = (A_m2 * N_cells * Dmem_H2 / L_pem_m) * C_H2_mem  # mol/s
 
         # 3. Compute true physical Faradaic Efficiency
-        # As n_dot_h2_theo gets small at low loads, this fraction will naturally drop, creating your U-shape!
+        # As n_dot_h2_theo gets small at low loads, this fraction drops, producing the characteristic U-shaped efficiency curve
         eta_F_physical = (n_dot_h2_theo - n_perm_h2_stack) / n_dot_h2_theo
         n_dot_h2_gen = n_dot_h2_theo * eta_F_physical
         # Corrections
@@ -130,7 +123,7 @@ for P_goal in P_range:
         J_mt_O2 = k_mt * A_m2 * N_cells         
 
         # Production-driven supersaturation at the Anode
-        # n_dot_o2_gen is your calculated O2 production
+        # n_dot_o2_gen is the calculated O2 production rate
         C_gen_O2 = n_dot_o2_gen / (J_mt_O2 + 1e-30) 
 
         # Henry equilibrium (Anode side is usually at lower pressure, e.g., 1 bar)
@@ -268,7 +261,7 @@ if __name__ == "__main__":
     plt.grid(True, alpha=0.3)
     plt.show()
 
-    # Calculate the ratios from your results
+    # Calculate the water transport ratios from the results
     membrane_ratio = [results["H2O Membrane Total"][i] / results["H2O Consumed"][i] for i in range(len(results["Current Density"]))]
     anode_outlet_ratio = [results["H2O Outlet Anode"][i] / results["H2O Consumed"][i] for i in range(len(results["Current Density"]))]
 

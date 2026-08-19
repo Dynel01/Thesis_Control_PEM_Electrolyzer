@@ -75,8 +75,6 @@
 
 import pandas as pd
 import matplotlib.pyplot as plt
-import math
-from collections import Counter
 
 pi_h2 = 5.0
 pi_h2_grey = 2.0
@@ -96,9 +94,9 @@ scenarios = [
 
 FORMULATION_LABELS = [
     "Pure Revenue",
-    "Weighted + Floor (Green/Grey) + Shortfall($5/kg)",
-    "Weighted + Floor (Green/Grey) + Shortfall($2/kg)",
-    "Floor (Green/Grey) + Shortfall($2/kg)",
+    # "Weighted + Floor (Green/Grey) + Shortfall($5/kg)",
+    "Weighted + Floor (Green/Yellow) + Shortfall($2/kg)",
+    "Floor (Green/Yellow) + Shortfall($2/kg)",
     "Full Horizon MPC",
     "Normalized",
     "Normalized(More weightage to H2)",
@@ -108,9 +106,9 @@ def build_cases(folder, num):
     base = f"Simulation_Results/{folder}"
     return {
         "Pure Revenue": f"{base}/mpc_results_pure_revenue_scenario_{num}.csv",
-        "Weighted + Floor (Green/Grey) + Shortfall($5/kg)": f"{base}/mpc_results_guaranteed_floor_scenario_{num}.csv",
-        "Weighted + Floor (Green/Grey) + Shortfall($2/kg)": f"{base}/mpc_results_guaranteed_floor_shortfall_less_scenario_{num}.csv",
-        "Floor (Green/Grey) + Shortfall($2/kg)": f"{base}/mpc_results_guaranteed_floor_shortfall_less_scenario_{num}_lower_weight.csv",
+        # "Weighted + Floor (Green/Grey) + Shortfall($5/kg)": f"{base}/mpc_results_guaranteed_floor_scenario_{num}.csv",
+        "Weighted + Floor (Green/Yellow) + Shortfall($2/kg)": f"{base}/mpc_results_guaranteed_floor_shortfall_less_scenario_{num}.csv",
+        "Floor (Green/Yellow) + Shortfall($2/kg)": f"{base}/mpc_results_guaranteed_floor_shortfall_less_scenario_{num}_lower_weight.csv",
         "Full Horizon MPC": f"{base}/Full_Horizon_MPC_Scenario_{num}.csv",
         "Normalized": f"{base}/normalized_results_0.4_scenario_{num}.csv",
         "Normalized(More weightage to H2)": f"{base}/normalized_results_0.5_scenario_{num}.csv",
@@ -147,8 +145,8 @@ def compute_results(cases):
         }
     return results
 
-colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:orange', 'tab:purple', 'tab:brown', 'tab:pink']
-markers = ['o', 's', '^', 'D', 'v', 'P', 'X']
+colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:orange', 'tab:purple', 'tab:brown']
+markers = ['o', 's', '^', 'D', 'v', 'X']
 
 all_results = {}
 for folder, title, num in scenarios:
@@ -176,50 +174,15 @@ for ax, (folder, title, num) in zip(axes1, scenarios):
     x_range = x_max - x_min if x_max != x_min else 1
     y_range = y_max - y_min if y_max != y_min else 1
 
-    n = len(items)
-    cluster_id = list(range(n))
-    for a in range(n):
-        for b in range(a + 1, n):
-            dx = abs(xs_raw[a] - xs_raw[b]) / x_range
-            dy = abs(ys_raw[a] - ys_raw[b]) / y_range
-            if dx < 0.08 and dy < 0.08:
-                root_a, root_b = cluster_id[a], cluster_id[b]
-                for k in range(n):
-                    if cluster_id[k] == root_b:
-                        cluster_id[k] = root_a
-
-    clusters = {}
-    for idx, c in enumerate(cluster_id):
-        clusters.setdefault(c, []).append(idx)
-
-    x_spread = max(x_range, 15)
-    y_spread = max(y_range, 0.005)
-
-    plotted_xy = {}
-    for c_id, members in clusters.items():
-        k = len(members)
-        if k == 1:
-            i = members[0]
-            plotted_xy[i] = (xs_raw[i], ys_raw[i])
-        else:
-            cx = sum(xs_raw[i] for i in members) / k
-            cy = sum(ys_raw[i] for i in members) / k
-            radius_x = 0.08 * x_spread * (0.6 + 0.4 * k)
-            radius_y = 0.08 * y_spread * (0.6 + 0.4 * k)
-            for pos, i in enumerate(members):
-                angle = 2 * math.pi * pos / k
-                jx = cx + radius_x * math.cos(angle)
-                jy = cy + radius_y * math.sin(angle)
-                plotted_xy[i] = (jx, jy)
-
+    # Markers are ALWAYS plotted at their true, unmodified data coordinates --
+    # no jitter, no repositioning. Overlapping/near-identical points naturally
+    # stack visually (visible via alpha transparency); the color+shape legend
+    # is sufficient to identify each formulation, so no per-point number
+    # labels are needed, avoiding the label-placement problem entirely.
     for i, (label, vals) in enumerate(items):
-        x, y = plotted_xy[i]
-        ax.scatter(x, y, s=160, color=colors[i], marker=markers[i],
-                   edgecolors='black', alpha=0.9, zorder=3)
-        ax.annotate(str(i + 1), (x, y), textcoords="offset points",
-                    xytext=(0, 10), fontsize=9, ha='center', fontweight='bold',
-                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.85),
-                    zorder=4)
+        x, y = xs_raw[i], ys_raw[i]
+        ax.scatter(x, y, s=180, color=colors[i], marker=markers[i],
+                   edgecolors='black', linewidths=1.2, alpha=0.75, zorder=3)
 
     ax.axvline(60, color='black', alpha=0.3, linestyle='--', lw=2)
     ax.set_xlabel('Total H2 Delivered (tonnes)')
@@ -239,7 +202,7 @@ fig1.legend(handles=legend_handles, loc='lower center', ncol=2, fontsize=8,
             bbox_to_anchor=(0.5, -0.09), frameon=True)
 fig1.suptitle('Revenue vs. Hydrogen Delivery Trade-off Across Formulations and Scenarios', fontsize=14)
 plt.tight_layout(rect=[0, 0.10, 1, 0.96])
-plt.savefig('scenario_comparison_h2_revenue.png', dpi=150, bbox_inches='tight')
+plt.savefig('scenario_comparison_h2_revenue.pdf', dpi=150, bbox_inches='tight')
 plt.show()
 
 # --- Figure 2: 2x2 grid of STACK LIFE (years), numbered x-axis matching Figure 1 ---
@@ -256,7 +219,7 @@ for ax, (folder, title, num) in zip(axes2, scenarios):
         v = results[l]['Stack_Life_Years']
         if v == float('inf'):
             life_values.append(STACK_LIFE_CAP)
-            label_text.append('∞')
+            label_text.append('\u221e')
         elif v > STACK_LIFE_CAP:
             life_values.append(STACK_LIFE_CAP)
             label_text.append(f'{v:.1f}')
@@ -280,5 +243,5 @@ fig2.legend(handles=legend_handles, loc='lower center', ncol=2, fontsize=8,
             bbox_to_anchor=(0.5, -0.09), frameon=True)
 fig2.suptitle('Implied Stack Life Across Formulations and Scenarios\n(dashed line = 20-year project horizon; \u221e = zero measured degradation in this window)', fontsize=13)
 plt.tight_layout(rect=[0, 0.10, 1, 0.94])
-plt.savefig('scenario_comparison_stack_life.png', dpi=150, bbox_inches='tight')
+plt.savefig('scenario_comparison_stack_life.pdf', dpi=150, bbox_inches='tight')
 plt.show()

@@ -472,7 +472,7 @@ if __name__ == "__main__":
     
     
         # =========================================================
-    # CSV EXPORT -- same pattern as your other scripts
+    # CSV EXPORT -- same output format used across the other formulation scripts
     # =========================================================
     rows = []
     for t in model.T:

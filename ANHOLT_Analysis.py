@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-#1. Define your file paths
+#1. File paths
 # ANH_FILES = [
 #     r"Østed data\Østed data\RDdatasharing_ANH\Ørsted Confidential Information - SCADA_ANH_2013_JAN_JUN.csv",
 #     r"Østed data\Østed data\RDdatasharing_ANH\Ørsted Confidential Information - SCADA_ANH_2013_JUL_DEC.csv",
@@ -36,7 +36,7 @@ import matplotlib.dates as mdates
 #     'wtc_ActPower_stddev': 'mean'       # Average fluctuation (Degradation proxy)
 # }).reset_index()
 
-# # Rename for your model logic
+# # Rename for downstream model logic
 # anh_hub.rename(columns={
 #     'wtc_ActPower_mean': 'wtc_ActPower_mean',
 #     'wtc_PowerRef_endvalue': 'wtc_PowerRef_sum',
@@ -80,62 +80,123 @@ print(f"Total Turbines: {df[id_col].nunique()}")
 mask = (
     (df[wind_col] > 0) & 
     (df[wind_col] < 25) & 
-    ~((df[wind_col] > 4) & (df[power_col] <= 0))
+    ~((df[wind_col] > 3.5) & (df[power_col] <= 0))
 )
 df_clean = df[mask].copy()
 df_clean.loc[df_clean[power_col] < 0, power_col] = 0
 
-# 3. GENERATING THE POWER CURVE (Figure 1)
-plt.figure(figsize=(12, 7))
-plt.scatter(df_clean[wind_col], df_clean[power_col], 
-            alpha=0.05, s=1, color='teal', label='Anholt SCADA Data')
+# # 3. GENERATING THE POWER CURVE (Figure 1)
+# plt.figure(figsize=(12, 7))
+# plt.scatter(df_clean[wind_col], df_clean[power_col], 
+#             alpha=0.05, s=1, color='teal', label='Anholt SCADA Data')
 
-# Binned Average
+# # Binned Average
+# bins = np.arange(0, 26, 0.5)
+# df_clean.loc[:, 'bin'] = pd.cut(df_clean[wind_col], bins)
+# df_for_curve = df_clean[df_clean[ref_col] >= 3600]
+# binned_avg = df_for_curve.groupby('bin', observed=False)[power_col].mean()
+
+# plt.plot(bins[:-1], binned_avg.values, color='red', linewidth=3, label='Empirical Power Curve')
+
+# plt.title('Anholt Offshore Wind Farm: Operational Power Curve (2014)', fontsize=14, fontweight='bold')
+# plt.axvline(4, color='green', linestyle='--', label='Cut-in (4 m/s)')
+# plt.axvline(13, color='orange', linestyle='--', label='Rated (13 m/s)')
+# plt.xlabel('Wind Speed [m/s]')
+# plt.ylabel('Active Power [kW]')
+# plt.legend()
+# plt.grid(True, alpha=0.3)
+# # plt.savefig('Anholt_Power_Curve_2014.png', dpi=300)
+
+# weights = np.ones(len(df_clean)) / len(df_clean) 
+
+# # 4. WIND SPEED PROBABILITY DISTRIBUTION (Figure 2)
+# plt.figure(figsize=(10, 6))
+# plt.hist(df_clean[wind_col], bins=50, weights=weights, color='skyblue', edgecolor='white', alpha=0.7)
+# plt.title('Wind Speed Relative Frequency Distribution (Anholt 2014)', fontsize=14)
+# plt.xlabel('Wind Speed [m/s]')
+# plt.ylabel('Probability Density')
+# plt.grid(axis='y', alpha=0.3)
+# # plt.savefig('Anholt_Wind_Distribution.png', dpi=300)
+
+# # 5. POWER PROBABILITY DISTRIBUTION (Figure 3)
+# plt.figure(figsize=(10, 6))
+# plt.hist(df_clean[power_col], bins=50, weights=weights, color='goldenrod', edgecolor='white', alpha=0.7)
+# plt.title('Power Output Relative Frequency Distribution (Anholt 2014)', fontsize=14)
+# plt.xlabel('Active Power [kW]')
+# plt.ylabel('Probability Density')
+# plt.grid(axis='y', alpha=0.3)
+# daily_wind = df_clean[wind_col].resample('D').mean()
+
+# plt.figure(figsize=(15, 6))
+# plt.plot(daily_wind.index, daily_wind, color='green', label='Daily Average Wind')
+# plt.title('2014 Year Wind Speed Distribution')
+# plt.ylabel('Wind Speed [m/s]')
+# plt.grid(True, alpha=0.3)
+# #plt.savefig('WMR_2Year_Wind_Distribution.png', dpi=300)
+# plt.show()
+
+# 3. GENERATING THE POWER CURVE (Figure 1)
+# --- 1. WIND SPEED PROFILE (Figure A) ---
+daily_wind = df_clean[wind_col].resample('D').mean()
+
+fig, ax = plt.subplots(figsize=(12, 5))
+ax.plot(daily_wind.index, daily_wind, color='green', linewidth=1)
+ax.set_ylabel('Wind Speed [m/s]', fontsize=11)
+ax.grid(True, alpha=0.3)
+ax.set_position([0.10, 0.15, 0.85, 0.75]) 
+
+plt.savefig('Anholt_Hub/Anholt_Wind_Dist_Annual.png', dpi=300, bbox_inches='tight')
+plt.close()
+
+
+# --- 2. POWER CURVE (Figure B) ---
+fig, ax = plt.subplots(figsize=(12, 5))
+ax.scatter(df_clean[wind_col], df_clean[power_col], 
+           alpha=0.05, s=1, color='teal', label='Anholt SCADA Data')
+
 bins = np.arange(0, 26, 0.5)
 df_clean.loc[:, 'bin'] = pd.cut(df_clean[wind_col], bins)
 df_for_curve = df_clean[df_clean[ref_col] >= 3600]
 binned_avg = df_for_curve.groupby('bin', observed=False)[power_col].mean()
 
-plt.plot(bins[:-1], binned_avg.values, color='red', linewidth=3, label='Empirical Power Curve')
+ax.plot(bins[:-1], binned_avg.values, color='red', linewidth=2.5, label='Empirical Power Curve')
+ax.axvline(4, color='green', linestyle='--', label='Cut-in (4 m/s)')
+ax.axvline(13, color='orange', linestyle='--', label='Rated (13 m/s)')
 
-plt.title('Anholt Offshore Wind Farm: Operational Power Curve (2014)', fontsize=14, fontweight='bold')
-plt.axvline(4, color='green', linestyle='--', label='Cut-in (4 m/s)')
-plt.axvline(13, color='orange', linestyle='--', label='Rated (13 m/s)')
-plt.xlabel('Wind Speed [m/s]')
-plt.ylabel('Active Power [kW]')
-plt.legend()
-plt.grid(True, alpha=0.3)
-# plt.savefig('Anholt_Power_Curve_2014.png', dpi=300)
+ax.set_xlabel('Wind Speed [m/s]', fontsize=11)
+ax.set_ylabel('Active Power [kW]', fontsize=11)
+ax.legend(loc='upper left', fontsize=9, framealpha=0.8)
+ax.grid(True, alpha=0.3)
+ax.set_position([0.10, 0.15, 0.85, 0.75]) 
 
-# 4. WIND SPEED PROBABILITY DISTRIBUTION (Figure 2)
-plt.figure(figsize=(10, 6))
-plt.hist(df_clean[wind_col], bins=50, density=True, color='skyblue', edgecolor='white', alpha=0.7)
-plt.title('Wind Speed Frequency Distribution (Anholt 2014)', fontsize=14)
-plt.xlabel('Wind Speed [m/s]')
-plt.ylabel('Probability Density')
-plt.grid(axis='y', alpha=0.3)
-# plt.savefig('Anholt_Wind_Distribution.png', dpi=300)
-
-# 5. POWER PROBABILITY DISTRIBUTION (Figure 3)
-plt.figure(figsize=(10, 6))
-plt.hist(df_clean[power_col], bins=50, density=True, color='goldenrod', edgecolor='white', alpha=0.7)
-plt.title('Power Output Frequency Distribution (Anholt 2014)', fontsize=14)
-plt.xlabel('Active Power [kW]')
-plt.ylabel('Probability Density')
-plt.grid(axis='y', alpha=0.3)
-# plt.savefig('Anholt_Power_Distribution.png', dpi=300)
-
-daily_wind = df_clean[wind_col].resample('D').mean()
-
-plt.figure(figsize=(15, 6))
-plt.plot(daily_wind.index, daily_wind, color='green', label='Daily Average Wind')
-plt.title('2014 Year Wind Speed Distribution')
-plt.ylabel('Wind Speed [m/s]')
-plt.grid(True, alpha=0.3)
-#plt.savefig('WMR_2Year_Wind_Distribution.png', dpi=300)
-plt.show()
+plt.savefig('Anholt_Hub/Anholt_Power_Curve.png', dpi=300, bbox_inches='tight')
+plt.close()
 
 
+weights = np.ones(len(df_clean)) / len(df_clean) 
+
+# --- 3. WIND SPEED PROBABILITY DISTRIBUTION (Figure C) ---
+fig, ax = plt.subplots(figsize=(12, 5))
+ax.hist(df_clean[wind_col], bins=50, weights=weights, color='skyblue', edgecolor='white', alpha=0.7)
+ax.set_xlabel('Wind Speed [m/s]', fontsize=11)
+ax.set_ylabel('Probability Density', fontsize=11)
+ax.grid(axis='y', alpha=0.3)
+ax.set_position([0.10, 0.15, 0.85, 0.75]) 
+
+plt.savefig('Anholt_Hub/Anholt_Wind_Freq.png', dpi=300, bbox_inches='tight')
+plt.close()
+
+
+# --- 4. POWER PROBABILITY DISTRIBUTION (Figure D) ---
+fig, ax = plt.subplots(figsize=(12, 5))
+ax.hist(df_clean[power_col], bins=50, weights=weights, color='goldenrod', edgecolor='white', alpha=0.7)
+ax.set_xlabel('Active Power [kW]', fontsize=11)
+ax.set_ylabel('Probability Density', fontsize=11)
+ax.grid(axis='y', alpha=0.3, linestyle=':')
+ax.set_position([0.10, 0.15, 0.85, 0.75]) 
+
+plt.savefig('Anholt_Hub/Anholt_Power_Freq_Dist.png', dpi=300, bbox_inches='tight')
+plt.close()
 # 1. Calculate the time span
 total_days = (df_clean.index.max() - df_clean.index.min()).days
 
@@ -147,10 +208,10 @@ actual_points = len(df_clean)
 data_points = len(df)
 
 # 3. Calculate Completeness
-# This compares your cleaned data against a perfect 100% uptime scenario
+# Compares the cleaned data against a perfect 100% uptime scenario
 data_completeness = (actual_points / expected_points) * 100
 
-print(f"--- Updated Anholt Data Coverage Summary (2014) ---")
+print(f"--- Anholt Data Coverage Summary (2014) ---")
 print(f"Total Operational Days: {total_days}")
 print(f"Number of Turbines:      {num_turbines_anholt}")
 print(f"Expected SCADA Points:   {expected_points:,}")
@@ -168,6 +229,7 @@ capacity_factor = (aep_mwh / theoretical_max_mwh) * 100
 print(f"\n--- 2014 Resource Assessment ---")
 print(f"Mean Wind Speed: {df_clean[wind_col].mean():.2f} m/s")
 print(f"Annual Energy Production (AEP): {aep_mwh:,.2f} MWh")
+print(f"Theoretical Max AEP: {theoretical_max_mwh:,.2f} MWh")
 print(f"Calculated Capacity Factor: {capacity_factor:.2f} %")
 
 # 6. CURTAILMENT ANALYSIS (PowerRef vs ActivePower)
@@ -273,7 +335,7 @@ print(time_diffs.head(5))
 # Create a full range of every single day in 2014
 full_year_range = pd.date_range(start='2014-01-01', end='2014-12-31', freq='D')
 
-# daily_wind comes from your df_clean resampling earlier
+# daily_wind comes from the df_clean resampling earlier
 # We check which days in the calendar year are NOT in our dataset
 missing_days = full_year_range[~full_year_range.isin(daily_wind.index.date)]
 
@@ -310,7 +372,7 @@ tech_fault_mask = (df[wind_col] >= 4) & (df[power_col] <= 0) & (df[ref_col] >= 3
 tech_fault_hours = len(df[tech_fault_mask]) * (10/60)
 
 # 2. Pure Curtailment (Ref is low, forcing Power to be low)
-# This is the "Fuel" for your Electrolyzer!
+# This is the input power supply for the electrolyzer
 curt_mask = (df[wind_col] >= 4) & (df[ref_col] < 3600)
 curtailment_hours = len(df[curt_mask]) * (10/60)
 
@@ -318,8 +380,8 @@ curtailment_hours = len(df[curt_mask]) * (10/60)
 
 print(f"\n--- System State Totals ---")
 print(f"Total Standby Hours (Low Wind): {standby_hours:,.1f} turbine-hours")
-print(f"Corrected Technical Fault Hours: {tech_fault_hours:,.1f} turbine-hours")
-print(f"Corrected Curtailment Hours:     {curtailment_hours:,.1f} turbine-hours")
+print(f"Technical Fault Hours: {tech_fault_hours:,.1f} turbine-hours")
+print(f"Curtailment Hours:     {curtailment_hours:,.1f} turbine-hours")
 
 df_clean['ideal_power'] = df_clean['bin'].map(binned_avg).astype(float)
 
@@ -354,9 +416,10 @@ dk1_prices = el_price[el_price['PriceArea'] == 'DK1'][['time_hourly', 'SpotPrice
 dk1_prices = dk1_prices.drop_duplicates(subset=['time_hourly'], keep='first')
 
 # RESAMPLING: Hourly -> 10 Minutes
-# Updated '10T' to '10min' to fix the FutureWarning
+# Uses '10min' resample alias ('10T' is deprecated in pandas)
 dk1_prices_10min = dk1_prices.set_index('time_hourly').resample('10min').ffill().reset_index()
 dk1_prices_10min.rename(columns={'time_hourly': 'TimeStamp', 'SpotPriceEUR': 'SpotPrice_DK1'}, inplace=True)
+dk1_prices_10min['SpotPrice_DK1'] = dk1_prices_10min['SpotPrice_DK1']
 
 hub_analysis = df_clean.groupby('TimeStamp').agg({
     'wtc_ActPower_mean': 'sum',
@@ -366,7 +429,7 @@ hub_analysis = df_clean.groupby('TimeStamp').agg({
     'curtailed_kW': 'sum',
 }).reset_index()
 
-# 5. Peak Event Analysis (Corrected Linking)
+# 5. Peak Event Analysis
 max_idx = hub_analysis['wtc_ActPower_mean'].idxmax()
 min_idx = hub_analysis['wtc_ActPower_mean'].idxmin()
 
@@ -398,8 +461,8 @@ print(f"Found {len(october_gap)} raw turbine records during this window.")
 if len(october_gap) == 0:
     print("RESULT: The days are completely missing from the raw SCADA file itself. This was a system-wide logging blackout.")
 else:
-    print("\nSample of raw data before your cleaning mask deleted it:")
-    # Look at the key columns that triggered your mask
+    print("\nSample of raw data before the cleaning mask was applied:")
+    # Key columns that triggered the mask
     sample_cols = [power_col, wind_col, ref_col, id_col, std_col]
     print(october_gap[sample_cols].head(10))
     
@@ -420,11 +483,12 @@ if num_duplicates > 0:
     # Show the first few duplicates to see where they are coming from
     print(df[duplicates].sort_index().head(10))
 else:
-    print("No duplicates detected. Your file merge was clean!")
+    print("No duplicates detected. File merge was clean.")
     
     
 hub_master = pd.merge(hub_analysis, dk1_prices_10min, on='TimeStamp', how='inner')   
 hub_master['Electricity Revenue'] = hub_master['wtc_ActPower_mean'] * hub_master['SpotPrice_DK1']/(1000*6)
+hub_master['TI']= hub_master['wtc_ActPower_stddev'] / hub_master['wtc_ActPower_mean']
 hub_master.to_csv('Anholt_hub_analysis.csv', index=False)
 
 # 1. Constants & Thresholds
@@ -437,43 +501,122 @@ CAPEX_PER_KW = 2196                          # €/kW
 OPEX_PER_KW_YR = 54.9                        # €/kW/yr
 STACK_REPLACE_PER_KW = 494                   # €/kW
 
-sizing_results = []
+# sizing_results = []
 
+
+# for n in range(1000, 25100, 100):
+#     PEM_CAPACITY_KW = n * PEM_STACK_CAPACITY_KW  
+#     hub_master['PEM_Power_In_kW'] = 0.0
+#     # Price < 100: Use wind
+#     mask_below = hub_master['SpotPrice_DK1'] < BREAKEVEN_POINT
+#     hub_master.loc[mask_below, 'PEM_Power_In_kW'] = hub_master['wtc_ActPower_mean'].clip(upper=PEM_CAPACITY_KW)
+    
+#     # Price < 0: Grid-Buy
+#     mask_neg = hub_master['SpotPrice_DK1'] < 0
+#     hub_master.loc[mask_neg, 'PEM_Power_In_kW'] = PEM_CAPACITY_KW
+    
+#     # Annualized Stats
+#     h2_kg_total = (hub_master['PEM_Power_In_kW'] * (10/60) / SEC_H2).sum()
+#     net_grid_flow = hub_master['wtc_ActPower_mean'] - hub_master['PEM_Power_In_kW']
+#     elec_rev_total = (net_grid_flow * (10/60) * (hub_master['SpotPrice_DK1'] / 1000)).sum()
+    
+#     ann_h2_kg = h2_kg_total
+#     ann_revenue = (ann_h2_kg * H2_PRICE_EUR + (elec_rev_total))
+#     cap_factor = (hub_master['PEM_Power_In_kW'].mean() / PEM_CAPACITY_KW) * 100
+
+#     # 3. Financial Modeling (20 Years)
+#     total_capex = PEM_CAPACITY_KW * CAPEX_PER_KW
+#     ann_opex_fixed = PEM_CAPACITY_KW * OPEX_PER_KW_YR
+#     stack_replace_total = PEM_CAPACITY_KW * STACK_REPLACE_PER_KW
+    
+#     npv = -total_capex
+#     pv_costs = total_capex
+#     pv_h2 = 0
+    
+#     for yr in range(1, 21):
+#         cf = ann_revenue - ann_opex_fixed
+#         yr_cost = ann_opex_fixed
+        
+#         if yr in [8, 16]: # Replacements
+#             cf -= stack_replace_total
+#             yr_cost += stack_replace_total
+            
+#         npv += cf / (1 + DISCOUNT_RATE)**yr
+#         pv_costs += yr_cost / (1 + DISCOUNT_RATE)**yr
+#         pv_h2 += ann_h2_kg / (1 + DISCOUNT_RATE)**yr
+        
+#     lcoh = pv_costs / pv_h2 if pv_h2 > 0 else 0
+    
+#     # Store results
+#     sizing_results.append({
+#         'n': n,
+#         'MW': PEM_CAPACITY_KW / 1000,
+#         'NPV_MEUR': npv / 1e6,
+#         'NPV/CAPEX': npv / total_capex,
+#         'LCOH': lcoh,
+#         'CapFactor': cap_factor,
+#         'Annual_Revenue': ann_revenue
+#     })
+
+# # Convert to DataFrame to find the best result
+# results_df = pd.DataFrame(sizing_results)
+# # results_df['Score'] = (
+# #     0.5 * (results_df['NPV_MEUR'] / results_df['NPV_MEUR'].max())
+# #     - 0.3 * (results_df['LCOH'] / results_df['LCOH'].max())
+# #     + 0.2 * (results_df['CapFactor'] / 100)
+# # )
+# ==============================================================================
+# STANDALONE ELECTROLYZER SIZING LOOP
+# ==============================================================================
+# The wind farm revenue is removed. The electrolyzer is now treated as a 
+# separate business entity that pays the wind farm the spot price for its energy.
+
+sizing_results = []
 
 for n in range(1000, 25100, 100):
     PEM_CAPACITY_KW = n * PEM_STACK_CAPACITY_KW  
     hub_master['PEM_Power_In_kW'] = 0.0
-    # Price < 100: Use wind
+    
+    # Rule 1: Price < Breakeven -> Use wind power up to capacity
     mask_below = hub_master['SpotPrice_DK1'] < BREAKEVEN_POINT
     hub_master.loc[mask_below, 'PEM_Power_In_kW'] = hub_master['wtc_ActPower_mean'].clip(upper=PEM_CAPACITY_KW)
     
-    # Price < 0: Grid-Buy
+    # Rule 2: Price < 0 -> Grid-Buy at maximum capacity
     mask_neg = hub_master['SpotPrice_DK1'] < 0
     hub_master.loc[mask_neg, 'PEM_Power_In_kW'] = PEM_CAPACITY_KW
     
-    # Annualized Stats
-    h2_kg_total = (hub_master['PEM_Power_In_kW'] * (10/60) / SEC_H2).sum()
-    net_grid_flow = hub_master['wtc_ActPower_mean'] - hub_master['PEM_Power_In_kW']
-    elec_rev_total = (net_grid_flow * (10/60) * (hub_master['SpotPrice_DK1'] / 1000)).sum()
+    # Calculate physical hydrogen yield (kg)
+    ann_h2_kg = (hub_master['PEM_Power_In_kW'] * (10/60) / SEC_H2).sum()
     
-    ann_h2_kg = h2_kg_total
-    ann_revenue = (ann_h2_kg * H2_PRICE_EUR + (elec_rev_total))
+    # Calculate the exact cost of the electricity consumed by the electrolyzer
+    # Energy (kWh) * Spot Price (€/kWh)
+    elec_cost_total = (hub_master['PEM_Power_In_kW'] * (10/60) * (hub_master['SpotPrice_DK1'] / 1000)).sum()
+    
+    # Standalone Hydrogen Plant Revenue (Hydrogen Sales minus its Electricity Bill)
+    h2_sales_revenue = ann_h2_kg * H2_PRICE_EUR
+    ann_operational_profit = h2_sales_revenue - elec_cost_total
+    
+    # Electrolyzer Capacity Factor
     cap_factor = (hub_master['PEM_Power_In_kW'].mean() / PEM_CAPACITY_KW) * 100
 
-    # 3. Financial Modeling (20 Years)
+    # Financial Parameters (Only applying to the Electrolyzer asset)
     total_capex = PEM_CAPACITY_KW * CAPEX_PER_KW
     ann_opex_fixed = PEM_CAPACITY_KW * OPEX_PER_KW_YR
     stack_replace_total = PEM_CAPACITY_KW * STACK_REPLACE_PER_KW
     
+    # NPV initialized to the stand-alone chemical plant investment
     npv = -total_capex
     pv_costs = total_capex
     pv_h2 = 0
     
+    # 20-Year Cash Flow Projection
     for yr in range(1, 21):
-        cf = ann_revenue - ann_opex_fixed
+        # Net cash flow = Hydrogen Operational Profit - Fixed Maintenance OPEX
+        cf = ann_operational_profit - ann_opex_fixed
         yr_cost = ann_opex_fixed
         
-        if yr in [8, 16]: # Replacements
+        # Account for periodic stack replacement cycles
+        if yr in [8, 16]: 
             cf -= stack_replace_total
             yr_cost += stack_replace_total
             
@@ -481,9 +624,10 @@ for n in range(1000, 25100, 100):
         pv_costs += yr_cost / (1 + DISCOUNT_RATE)**yr
         pv_h2 += ann_h2_kg / (1 + DISCOUNT_RATE)**yr
         
-    lcoh = pv_costs / pv_h2 if pv_h2 > 0 else 0
+    # Calculate true stand-alone Levelized Cost of Hydrogen
+    lcoh = (pv_costs + (elec_cost_total * sum(1 / (1 + DISCOUNT_RATE)**yr for yr in range(1, 21)))) / pv_h2 if pv_h2 > 0 else 0
     
-    # Store results
+    # Store clean standalone results
     sizing_results.append({
         'n': n,
         'MW': PEM_CAPACITY_KW / 1000,
@@ -491,19 +635,15 @@ for n in range(1000, 25100, 100):
         'NPV/CAPEX': npv / total_capex,
         'LCOH': lcoh,
         'CapFactor': cap_factor,
-        'Annual_Revenue': ann_revenue
+        'Annual_Operational_Profit_MEUR': ann_operational_profit / 1e6
     })
 
-# Convert to DataFrame to find the best result
+# Convert back to DataFrame for normal normalization and scoring
 results_df = pd.DataFrame(sizing_results)
-# results_df['Score'] = (
-#     0.5 * (results_df['NPV_MEUR'] / results_df['NPV_MEUR'].max())
-#     - 0.3 * (results_df['LCOH'] / results_df['LCOH'].max())
-#     + 0.2 * (results_df['CapFactor'] / 100)
-# )
+# ==============================================================================
 
 # best_n = results_df.loc[results_df['Score'].idxmax()]
-results_df['Annual_Revenue'] = results_df['Annual_Revenue'] / 1e6
+results_df['Annual_Operational_Profit_MEUR'] = results_df['Annual_Operational_Profit_MEUR'] / 1e6
 # 1. Normalize NPV (Higher is better)
 results_df['NPV_norm'] = (results_df['NPV_MEUR'] - results_df['NPV_MEUR'].min()) / \
                          (results_df['NPV_MEUR'].max() - results_df['NPV_MEUR'].min())
@@ -531,7 +671,7 @@ print(f"Max NPV: {best_n['NPV_MEUR']:.2f} Million €")
 print(f"NPV/CAPEX: {best_n['NPV/CAPEX']:.2f}")
 print(f"LCOH: {best_n['LCOH']:.2f} €/kg")
 print(f"Electrolyzer Capacity Factor: {best_n['CapFactor']:.2f} %")
-print(f"Optimal Annual Revenue: {best_n['Annual_Revenue']:.2f} Million €")
+print(f"Optimal Annual Revenue: {best_n['Annual_Operational_Profit_MEUR']:.2f} Million €")
 
 
 plt.figure(figsize=(10, 6))
@@ -573,7 +713,8 @@ plt.savefig('NPV_vs_MW_for_ANHOLT.png', dpi=300)
 hourly_impact = hub_master.groupby(hub_master['TimeStamp'].dt.floor('h')).agg({
     'wtc_ActPower_mean': lambda x: (x.sum() * (10/60)) / 1000,
     'SpotPrice_DK1': 'first',
-    'wtc_AcWindSp_mean': 'mean'
+    'wtc_AcWindSp_mean': 'mean',
+    'TI': 'mean'
 }).reset_index().rename(columns={'wtc_ActPower_mean': 'actual_MWh', 'TimeStamp': 'time_hourly'})
 
 # Calculate Curtailed MWh at hourly level
@@ -612,5 +753,21 @@ plt.xlabel('Spot Price [EUR/MWh]', fontsize=12)
 plt.ylabel('Curtailed Energy [MWh]', fontsize=12)
 plt.grid(True, alpha=0.3)
 plt.legend()
-# plt.savefig('Anholt_Market_Correlation.png', dpi=300)
+plt.savefig('Anholt_Market_Correlation.png', dpi=300)
+plt.show()
+
+clean_df = hourly_impact[(hourly_impact['wtc_AcWindSp_mean'] >= 3.0) & 
+              (hourly_impact['TI'] > 0.0) & 
+              (hourly_impact['TI'] <= 0.50)]
+
+# 4. Plot the realistic data
+plt.figure(figsize=(10, 6))
+plt.scatter(clean_df['wtc_AcWindSp_mean'], clean_df['TI'], alpha=0.3, s=5, color='royalblue')
+plt.title('Turbulence Intensity vs Wind Speed (2014 Cleaned SCADA)')
+plt.xlabel('Mean Wind Speed [m/s]')
+plt.ylabel('Turbulence Intensity [-]')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.xlim(0, 25)
+plt.ylim(0, 0.5) # Keeps the chart locked into the 0% - 50% realistic window
+# plt.savefig("Cleaned_Turbulence_Plot.png")
 plt.show()

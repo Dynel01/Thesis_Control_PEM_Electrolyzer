@@ -4,8 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 # SINGLE 13.5 kW stack unit
 N_cells = 48              # Cells in that one stack
-N_stacks_total = 10000    # Total units in your 210 MW Hub
-T_nominal = 328.15       # 55°C (Fixed Operating Point)
+N_stacks_total = 10000    # Total stack units in the 135 MW plant
+T_nominal = 348.15       # 55°C (Fixed Operating Point)
 V_thermoneutral = V_tn(T_nominal)   # V (Thermoneutral voltage - Majumdar Eq 14)
 T_ambient = 298.15       # 25°C (Ambient Temperature)
 V_temp= V_cell(T_nominal,j_nom, p_cathode=13, p_anode=1.01325)
@@ -60,7 +60,7 @@ def cp_water(T_nominal):
     return cp
 
 
-def thermal_balance(V_temp, I_stack, T_nominal, N_stacks_total, N_cells, LSA, h_total_ins, T_ambient, V_thermoneutral):
+def thermal_balance(V_temp, I_stack, T_nominal, N_stacks_total, N_cells, LSA, h_total_ins,h_total, T_ambient, V_thermoneutral):
     '''
     Calculates the Heat generated and cooling required to maintain the required Temperature
     '''
@@ -68,15 +68,16 @@ def thermal_balance(V_temp, I_stack, T_nominal, N_stacks_total, N_cells, LSA, h_
     q_gen_cell= q_gen_stack/ N_cells
     q_density= q_gen_cell/(A_cell*1e-4) # W/m^2
     q_loss_stack= LSA *h_total_ins * (T_nominal - T_ambient)
+    q_loss_stack_wo_insulation= LSA *h_total * (T_nominal - T_ambient)
     q_cooling_required_stack = max(0, q_gen_stack - q_loss_stack-q_vap_stack)
     # q_cooling_required_stack = 0.0
     Temp_diff= T_nominal - T_water_avg
-    q_limit_physical= U*Plate_area*Temp_diff
-    # 4. Scale to 210 MW Hub (Convert to Megawatts)
+    q_limit_physical= U*Plate_area*Temp_diff*N_cells
+    # 4. Scale to full 135 MW plant (convert to Megawatts)
     total_cooling_MW = (q_cooling_required_stack * N_stacks_total) / 1e6
-    return total_cooling_MW, q_cooling_required_stack, q_gen_stack, q_loss_stack, q_density, q_limit_physical
+    return total_cooling_MW, q_cooling_required_stack, q_gen_stack, q_loss_stack, q_density, q_limit_physical, q_loss_stack_wo_insulation
 
-total_cool_MW, q_cooling_stack, q_generated_stack, q_losses_stack, q_density, q_limit_physical = thermal_balance(V_temp, I_stack, T_nominal, N_stacks_total, N_cells, LSA, h_total_ins, T_ambient, V_thermoneutral)
+total_cool_MW, q_cooling_stack, q_generated_stack, q_losses_stack, q_density, q_limit_physical, q_losses_stack_wo_insulation = thermal_balance(V_temp, I_stack, T_nominal, N_stacks_total, N_cells, LSA, h_total_ins, h_total, T_ambient, V_thermoneutral)
 
 mass_rate= q_cooling_stack/(cp_water(T_nominal)*5)
 channel_mass_rate= mass_rate/N_stack_channels
@@ -115,11 +116,13 @@ if __name__=="__main__":
     print(f"Reynolds Number: {Reynolds_number:.4f}")
     print(f"Nusselt Number: {Nusselt_number:.4f}")
     print(f" LSA: {LSA:.4f} m^2")
+    print(f" h_air_conv: {h_air_conv:.4f} W/(m^2·K)")
     print(f" h_air_rad: {h_air_rad:.4f} W/(m^2·K)")
     print(f"Dynamic Viscosity: {dynamic_viscosity(T_nominal):.4f} Pa.s")
     print(f"Specific Heat: {cp_water(T_nominal):.4f} J/kg.K")
     print(f'q_gen_stack: {q_generated_stack:.4f} W')
     print(f'q_loss_stack: {q_losses_stack:.4f} W')
+    print(f'q_loss_stack_wo_insulation: {q_losses_stack_wo_insulation:.4f} W')
     print(f'q_cooling_required_stack: {q_cooling_stack:.4f} W')
     print(f'Total Cooling Required in Megawatts: {total_cool_MW:.4f}')
     print(f"Mass Rate: {mass_rate:.4f} kg/s")
@@ -132,6 +135,7 @@ if __name__=="__main__":
     print(f"Temperature Difference: {dy_T:.4f} K")
     print(f"dT/dy: {dT_dy:.4f} K/m")
     print(f"Pressure Drop: {P_drop:.4f} Pa")
+    print(f"Time Required: {time_required:.4f} seconds or {time_required/60:.4f} minutes")
         
     
 

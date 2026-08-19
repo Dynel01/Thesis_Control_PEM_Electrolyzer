@@ -70,7 +70,7 @@ RHO_NAFION   = 2000.0
 
 # -- Olivier et al. Ratios --
 BP_SOLID_RATIO = 0.625    # 62.5% Titanium, 37.5% water channels
-PTL_POROSITY   = 0.37     # 37% of PTL volume is water
+PTL_POROSITY   = 0.35     # 35% of PTL volume is water
 
 # Convert Area to m2 for calculations
 A_m2 = A_cell / 10000.0 
@@ -106,7 +106,7 @@ C_MEA   = M_MEA            * CP_MEMBRANE
 
 # Total System Capacitance
 C_TOTAL_J_K = C_BP + C_PTL + C_EP + C_WATER + C_MEA
-C_TOTAL_KJ_K = C_TOTAL_J_K / 1000.0  # Final value for your simulation (~9.77)
+C_TOTAL_KJ_K = C_TOTAL_J_K / 1000.0  # Used directly in the thermal simulation (~18.36)
 
 # Process Water Channels
 p_ch_width= 1.5e-3 # m
@@ -141,5 +141,10 @@ if __name__ == "__main__":
     print(f"Internal Water Mass: {M_INTERNAL_WATER:.4f} kg")
     print(f"Total Stack Mass: {M_BIPOLAR_PLATES + M_PTL + M_END_PLATES + M_INTERNAL_WATER + M_MEA:.4f} kg")
     print(f"Total Thermal Capacity: {C_TOTAL_J_K:.4f} J/K")
+    print(f"BP Thermal Capacity: {C_BP:.4f} J/K")
+    print(f"PTL Thermal Capacity: {C_PTL:.4f} J/K")
+    print(f"End Plates Thermal Capacity: {C_EP:.4f} J/K")
+    print(f"Water Thermal Capacity: {C_WATER:.4f} J/K")
+    print(f"MEA Thermal Capacity: {C_MEA:.4f} J/K")
     print(f"Process Water Channels Area: {p_ch_area:.4f} m2")
     print(f"Process Water Channels Volume: {p_ch_volume:.4f} m3 or {p_ch_volume*1000:.4f} L")

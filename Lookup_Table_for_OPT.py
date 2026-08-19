@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 from scipy.optimize import fsolve
 import matplotlib.pyplot as plt
 
-stack_power=np.linspace(0,135e3,101)
+stack_power=np.linspace(0,135e3,21)
 # SOH_range=np.linspace(1,0.1,10)
 SOH_range=np.linspace(1,1,1) #1.0
-temperatures = np.linspace(25, 80, 56) + 273.15
+temperatures = np.linspace(25, 80, 12) + 273.15
 N_stacks_total=1e4
 dt_seconds= 600
 stack_capacity_kw= 13.5
@@ -21,7 +21,7 @@ capex_per_kw = 494
 CAPEX_total = capex_per_kw * stack_capacity_kw * N_stacks_total
                 # Dynamic update of membrane thickness based on active SOH
 
-                # YOUR EXACT NESTED RESOLUTION FUNCTION
+                # Nested resolution loop: temperature -> SOH -> power setpoint
 results_table=[]
 for current_T in temperatures:
     for current_SOH in SOH_range: 
@@ -39,6 +39,7 @@ for current_T in temperatures:
                 j_solved= 0
                 h2_in_o2_percent= 0
                 h2_gen= 0
+                degradation_cost= 0
                 
             else:
                 stack_power_goal_kw = p_val/1e4
@@ -49,7 +50,7 @@ for current_T in temperatures:
                     P_calc = (V_degraded * PEM.N_cells * I) / 1000.0
                     return P_calc - stack_power_goal_kw
 
-                # Solve for current density using your specified fsolve setup
+                # Solve for the current density that matches the target power setpoint
                 j_solved = fsolve(power_error, 0.5)[0]
                 I_stack = j_solved * PEM.A_cell
                 V_ideal_step = ECM.V_cell(current_T, j_solved, PEM.p_cathode, PEM.p_anode)
@@ -60,10 +61,6 @@ for current_T in temperatures:
                             # ── PHASE 2: THERMAL MODULE ──
                             # Calculate the thermoneutral voltage for heat balance equations
                 V_thermoneutral = ECM.V_tn(current_T)
-                            
-                        # Place your upcoming thermal model equations here, for example:
-                        # self.current_T_kelvin = TM.solve_temperature(self.current_T_kelvin, V_stack, I_stack, V_thermoneutral)
-                            
                             
                             # Track reference thermoneutral voltage even when idle
                 current_L_pem_m = PEM.L_pem_m * (0.5 + 0.5 * current_SOH)
@@ -137,7 +134,7 @@ for current_T in temperatures:
                 K_thermal = np.exp(B_constant * (current_T - T_nominal_K))
                 step_steady_deg_V = ((0.2499 * j_solved + 2.3545) / 1e6) * K_thermal*(1/6)
                 damage_fraction = step_steady_deg_V / 0.18
-                degradation_cost = CAPEX_total*damage_fraction*0.5
+                degradation_cost = CAPEX_total*damage_fraction
                 if p_val == 0:
                     state= "OFF"
                 elif power_ratio == 0.1 and current_T < 40.0+273.15:
@@ -160,8 +157,9 @@ for current_T in temperatures:
                 'L_pem_m': current_L_pem_m,
                 'h2_in_o2_percent': h2_in_o2_percent,
                 'h2_gen_rate': h2_gen,
-                'V_tn': V_thermoneutral
-                    # ... add your Heat/Revenue calculations here
+                'V_tn': V_thermoneutral,
+                'Degradation_cost': degradation_cost
+                    # Heat and revenue metrics are computed downstream in the MPC scripts
             })
 
             print("Successful Iteration")

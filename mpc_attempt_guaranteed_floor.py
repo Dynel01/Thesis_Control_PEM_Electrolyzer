@@ -411,7 +411,7 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     # model.Objective_H2.deactivate()
 
     def objective_rule(m):
-        revenue_h2 = 1.0 * (sum(pi_h2 * m.h2_green[t] for t in m.T))+sum(pi_h2_grey * m.h2_grey[t] for t in m.T)
+        revenue_h2 = 1.5 * (sum(pi_h2 * m.h2_green[t] for t in m.T))+sum(pi_h2_grey * m.h2_grey[t] for t in m.T)
         grid_rev = sum((price_win[t] / 1e3) * (1 / 6) * (m.P_grid_export[t]-m.P_grid_import[t]) for t in m.T)
         degradation = sum( m.degradation_cost[t] for t in m.T)
         heat_rev = sum(
@@ -427,9 +427,15 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
     model.Objective_secondary = pyo.Objective(rule=objective_rule, sense=pyo.maximize)
 
     solver = pyo.SolverFactory('gurobi')
+    solver.options['DualReductions'] = 0
     solver.options['MIPFocus'] = 1
     solver.options['MIPGap'] = mip_gap  # back to the looser, speed-focused gap for the harder problem
     results=solver.solve(model, tee=verbose)
+    if str(results.solver.termination_condition) == 'infeasible':
+        print("INFEASIBLE — computing IIS to find the exact conflicting constraints...")
+        solver.options['ResultFile'] = 'infeasible_model.ilp'
+        solver.solve(model, tee=True, options={'ResultFile': 'infeasible_model.ilp'})
+        print("Check infeasible_model.ilp for the exact constraints in conflict.")
     print(f"  Status: {results.solver.termination_condition}, "
       f"Gap at cutoff: {getattr(results.solver, 'gap', 'n/a')}")
     return model
@@ -439,9 +445,9 @@ def build_and_solve_window(T_stack_init, P_stack_init, y_off_prev, y_cold_start_
 # 4. MPC ROLLING LOOP
 # =========================================================
 WINDOW_LEN = 144          # 24 hours at 10-min resolution -- prediction horizon
-BASE_IDX = 26208          # 2014-01-11 12:00 -- start of the demonstration period
-TOTAL_REAL_STEPS = 432    # 3 days 
-CONTROL_HORIZON = 6       # commit 6 steps (1 hour) before re-solving, cuts
+BASE_IDX = 0          # 2014-01-11 12:00 -- start of the demonstration period
+TOTAL_REAL_STEPS = 51337    # 3 days 
+CONTROL_HORIZON = 143       # commit 6 steps (1 hour) before re-solving, cuts
 H_MIN_PER_DAY = 20000
 H_min = H_MIN_PER_DAY * (TOTAL_REAL_STEPS / 144)         
 # EPSILON = 0.02            # allow at most 2% H2 sacrifice for heat/degradation
@@ -517,7 +523,7 @@ while k < TOTAL_REAL_STEPS:
     
 
 mpc_results = pd.DataFrame(committed)
-mpc_results.to_csv("mpc_results_guaranteed_floor_shortfall_less_scenario_4_lower_weight.csv", index=False)
+mpc_results.to_csv("mpc_results_annual_gf15.csv", index=False)
 num_solves = -(-TOTAL_REAL_STEPS // CONTROL_HORIZON)
 print(f"\nDone. {TOTAL_REAL_STEPS} real steps committed via {num_solves} solves, results in mpc_results.csv")
 print(f"Total H2 (committed steps): {mpc_results['H2'].sum():.2f} kg")

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 plant_capacity_kw = 135000.0
 min_operating_kw = 0.10 * plant_capacity_kw  # matches P_COLD / ON threshold
 
-mpc_results = pd.read_csv("Simulation_Results/Scenario_1_Volatility/mpc_results_guaranteed_floor_scenario_1.csv")
+mpc_results = pd.read_csv("mpc_results_annual_gf10.csv")
 
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
 
